@@ -1,0 +1,18 @@
+Arduino Nano Pin → Component
+D2: PTT switch input
+D4: Toon output (1kHz naar speaker)
+D5: Beep output (500Hz naar speaker)
+D6: Buzzer output (nieuw toegevoegd)
+D7: PTT relay driver
+D13               → LED anode (+), LED kathode (-) → GND (onboard LED)
+A0                → Potmeter output
+D7 (Pin 7)        → 7-segment display Segment A
+D8 (Pin 8)        → 7-segment display Segment B
+D9 (Pin 9)        → 7-segment display Segment C
+D10 (Pin 10)      → 7-segment display Segment D
+D11 (Pin 11)      → 7-segment display Segment E
+D12 (Pin 12)      → 7-segment display Segment F
+D3 (Pin 3)        → 7-segment display Segment G
+A1                → 7-segment display Decimal Point
+
+
