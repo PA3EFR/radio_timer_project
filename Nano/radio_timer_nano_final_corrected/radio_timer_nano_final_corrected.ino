@@ -226,7 +226,7 @@ void loop() {
       
       // START 1-SECONDE TONE + BUZZER EENMALIG
       tone(TONE_PIN, TONE_FREQUENCY);
-      tone(BUZZER_PIN, BUZZER_FREQUENCY);  // 800Hz buzzer meespelen bij toon
+      tone(BEEP_PIN, BEEP_FREQUENCY);  // 800Hz buzzer meespelen bij toon
       buzzerActive = true;                 // Markeer buzzer als actief
     }
     
@@ -235,7 +235,7 @@ void loop() {
       warningToneActive = false;
       warningToneCompleted = true;
       noTone(TONE_PIN);
-      noTone(BUZZER_PIN);        // Buzzer ook uit na toon fase
+      noTone(BEEP_PIN);        // Buzzer ook uit na toon fase
       buzzerActive = false;      // Reset buzzer state
     }
     
@@ -250,7 +250,7 @@ void loop() {
       warningBeepsActive = false;
       buzzerActive = false;        // Reset buzzer state na beeps
       noTone(BEEP_PIN);
-      noTone(BUZZER_PIN);  // Ook buzzer uit na beep periode
+      noTone(BEEP_PIN);  // Ook buzzer uit na beep periode
     }
     
     // Einde van timer: PTT UIT en display reset naar 0
@@ -260,7 +260,7 @@ void loop() {
       buzzerActive = false;        // Reset buzzer state bij einde timer
       digitalWrite(PTT_RELAY_PIN, LOW);  // PTT UIT bij einde van timer
       noTone(BEEP_PIN);
-      noTone(BUZZER_PIN);  // Buzzer uit bij einde timer
+      noTone(BEEP_PIN);  // Buzzer uit bij einde timer
       digitalWrite(LED_STATUS_PIN, LOW);
       
       // Display weer op 0 bij einde
@@ -365,7 +365,7 @@ void handleWarningBeeps() {
     }
     
     // Activeer buzzer voor beep
-    tone(BUZZER_PIN, BUZZER_FREQUENCY);
+    tone(BEEP_PIN,BEEP_FREQUENCY);
     buzzerActive = true;
     
     // Generate snel pulserende beep
@@ -431,14 +431,6 @@ void welcomeSequence() {
     delay(200);
   }
   
-  // SPECIFIEKE BUZZER TEST op A3
-  for (int i = 0; i < 3; i++) {
-    tone(BUZZER_PIN, BUZZER_FREQUENCY);  // 800Hz buzzer test
-    delay(300);
-    noTone(BUZZER_PIN);
-    delay(200);
-  }
-  
   // TEST toon + buzzer
   activateWarningTone();
   delay(1000);
@@ -449,12 +441,13 @@ void welcomeSequence() {
   // TEST beeps + buzzer
   for (int i = 0; i < 3; i++) {
     tone(BEEP_PIN, BEEP_FREQUENCY);
-    tone(BUZZER_PIN, BUZZER_FREQUENCY);  // Buzzer meespelen bij test (800Hz)
+    tone(BUZZER_PIN, BEEP_FREQUENCY);  // Buzzer meespelen bij test (800Hz)
     delay(200);
     noTone(BEEP_PIN);
     noTone(BUZZER_PIN);  // Buzzer ook uit
     delay(200);
   }
+  delay(2000);
 }
 
 // NIEUWE FUNCTIES VOOR 7-SEGMENT DISPLAY
