@@ -110,6 +110,7 @@ bool pttPrevious = false;
 unsigned long warningToneMs = 0;     // Wanneer warning tone start (t-15)
 unsigned long warningBeepsMs = 0;    // Wanneer beeps starten (t-6)
 unsigned long timerEndMs = 0;        // Wanneer timer eindigt
+unsigned long sessionTimerMs = 0;    // Bevroren timer waarde bij TX start
 
 // Timer instellingen (dynamisch via potmeter)
 float totalTimerSeconds = 0;
@@ -117,10 +118,22 @@ unsigned long totalTimerMs = 0;
 unsigned long lastPotReadTime = 0;
 const unsigned long POT_READ_INTERVAL = 500;  // Potmeter elke 500ms lezen
 
+// Potmeter filtering voor stabiele readings
+int potValueBuffer[10];  // Ring buffer voor filtering
+int potBufferIndex = 0;
+bool potBufferFilled = false;
+
 // Decimal Point (DP) knipper variabelen
 unsigned long lastDPToggleTime = 0;
 bool dpState = false;
 const unsigned long DP_BLINK_INTERVAL = 500;  // DP knippert elke 0.5 seconden
+
+// Segment animatie variabelen (t-15 warning visualisatie)
+bool segmentAnimationActive = false;
+unsigned long lastSegmentToggleTime = 0;
+int currentSegmentIndex = -1;  // -1 = geen segment actief, 0-5 = A-F (geen G)
+const unsigned long SEGMENT_ANIMATION_INTERVAL_FAST = 100;    // 0.1s per segment (t-6 tot TX-OFF)
+const unsigned long SEGMENT_ANIMATION_INTERVAL_SLOW = 200;    // 0.2s per segment (t-15 tot t-6)
 
 // Debounce variabelen
 unsigned long lastDebounceTime = 0;
@@ -206,13 +219,23 @@ void loop() {
     // PTT WATCHER: Zorg ervoor dat PTT HIGH blijft tijdens hele timer
     ensurePTTStaysHigh();
     
-    // 7-Segment Display update met percentage
-    updateDisplayPercentage(elapsed);
+    // 7-Segment Display update met countdown cijfer (GECORRIGEERD)
+    updateDisplayCountdown(elapsed);
+    
+    // Segment animatie tijdens t-15 tot TX-OFF
+    if (segmentAnimationActive) {
+      updateSegmentAnimation();
+    }
     
     // WAARSCHUWING TONE (t-15): Speel EENMALIG 1 seconde toon
     if (!warningTonePlayed && currentMs >= warningToneMs) {
       warningTonePlayed = true;  // Marker dat we dit hebben gedaan
       tone(TONE_PIN, TONE_FREQUENCY);  // 1kHz toon
+      
+      // Start segment animatie (A-G sequentie elke 0.2s)
+      segmentAnimationActive = true;
+      currentSegmentIndex = -1;  // Reset animatie
+      lastSegmentToggleTime = currentMs;
       
       // DEBUG: Snelle LED flits om aan te geven dat warning tone start
       digitalWrite(LED_STATUS_PIN, HIGH);
@@ -250,14 +273,17 @@ void loop() {
     if (currentMs >= timerEndMs) {
       timerActive = false;
       warningBeepsActive = false;
+      segmentAnimationActive = false;  // Stop segment animatie
       digitalWrite(PTT_RELAY_PIN, LOW);  // PTT UIT bij einde
       noTone(TONE_PIN);
       digitalWrite(LED_STATUS_PIN, LOW);
       
-      // Display reset naar 0
-      displayDigit(0);
+      // Reset alle segmenten
+      for (int i = 0; i < 7; i++) {
+        digitalWrite(segmentPinArray[i], LOW);
+      }
       
-      // DP resetten
+      // DP resetten (geen displayDigit(0) meer - laatste cijfer 9 blijft staan)
       digitalWrite(SEGMENT_DP_PIN, LOW);
       dpState = false;
       lastDPToggleTime = millis();
@@ -287,11 +313,13 @@ void startRadioSession() {
   timerStartTime = millis();
   lastBeepTime = 0;
   
-  // BEREKEN VASTE TIJDSTIPPEN BIJ START (gebruik current potmeter waarde)
-  unsigned long currentTimerMs = (unsigned long)(totalTimerSeconds * 1000.0);
-  warningToneMs = timerStartTime + (currentTimerMs - 15000);   // t-15 seconden
-  warningBeepsMs = timerStartTime + (currentTimerMs - 6000);   // t-6 seconden
-  timerEndMs = timerStartTime + currentTimerMs;               // Einde timer
+  // BEVRIIZ DE TIMER WAARDE bij start (zodat potmeter wijzigingen geen effect hebben)
+  sessionTimerMs = (unsigned long)(totalTimerSeconds * 1000.0);
+  
+  // BEREKEN VASTE TIJDSTIPPEN op basis van BEVROREN waarde
+  warningToneMs = timerStartTime + (sessionTimerMs - 15000);   // t-15 seconden
+  warningBeepsMs = timerStartTime + (sessionTimerMs - 6000);   // t-6 seconden
+  timerEndMs = timerStartTime + sessionTimerMs;               // Einde timer
   
   // KRITIEK: Activeer PTT en hou HIGH tijdens hele sessie
   digitalWrite(PTT_RELAY_PIN, HIGH);
@@ -299,7 +327,7 @@ void startRadioSession() {
   // Reset audio outputs
   noTone(TONE_PIN);  // Alle audio uit
   
-  // Display start met 0% (nog geen percentage getoond)
+  // Display start met 0
   displayDigit(0);
 }
 
@@ -310,11 +338,17 @@ void resetTimer() {
   warningToneActive = false;
   warningTonePlayed = false;
   warningBeepsActive = false;
+  segmentAnimationActive = false;  // Stop segment animatie
   
   // Reset alle outputs
   digitalWrite(PTT_RELAY_PIN, LOW);  // PTT UIT (manual reset)
   noTone(TONE_PIN);       // Alle audio uit
   digitalWrite(LED_STATUS_PIN, LOW);
+  
+  // Reset alle segmenten
+  for (int i = 0; i < 7; i++) {
+    digitalWrite(segmentPinArray[i], LOW);
+  }
   
   // Display weer op 0 bij reset
   displayDigit(0);
@@ -372,7 +406,30 @@ void updateStatusLED() {
 
 void readTimerPot() {
   // Lees analoog (0-1023 voor Arduino Nano) - ABSOLUTE TIMING seconden
-  int potValue = analogRead(TIMER_POT_PIN);
+  int rawPotValue = analogRead(TIMER_POT_PIN);
+  
+  // Update ring buffer voor filtering
+  potValueBuffer[potBufferIndex] = rawPotValue;
+  potBufferIndex = (potBufferIndex + 1) % 10;
+  
+  // Check of buffer vol is (na 10 metingen)
+  if (potBufferIndex == 0) {
+    potBufferFilled = true;
+  }
+  
+  // Bereken gemiddelde waarde
+  int potValue = 0;
+  if (potBufferFilled) {
+    // Bereken gemiddelde van alle 10 waarden
+    long sum = 0;
+    for (int i = 0; i < 10; i++) {
+      sum += potValueBuffer[i];
+    }
+    potValue = sum / 10;
+  } else {
+    // Nog niet vol, gebruik ruwe waarde
+    potValue = rawPotValue;
+  }
   
   // Converteer naar seconden (30-300 sec voor Nano)
   float potFraction = (float)potValue / 1023.0;
@@ -397,12 +454,15 @@ void welcomeSequence() {
   }
   
   // TEST toon (1kHz)
-  tone(TONE_PIN, TONE_FREQUENCY);
-  delay(500);
-  noTone(TONE_PIN);
+  for (int i = 0; i < 2; i++) {
+    tone(TONE_PIN, TONE_FREQUENCY);
+    delay(500);
+    noTone(TONE_PIN);
+    delay(100);
+  }
   
   // TEST beeps (500Hz pulserend)
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 2; i++) {
     tone(TONE_PIN, BEEP_FREQUENCY);
     delay(100);
     noTone(TONE_PIN);
@@ -493,16 +553,25 @@ void updateDPBlink() {
   }
 }
 
-void updateDisplayPercentage(unsigned long elapsed) {
-  if (elapsed >= totalTimerMs) {
-    // Timer klaar, toon 0
-    displayDigit(0);
+// GECORRIGEERDE FUNCTIE: Toon countdown cijfer (0-9)
+// Display toont 0-9 en dan 0 aan het einde (geen extra 0 na 9)
+void updateDisplayCountdown(unsigned long elapsed) {
+  // Check of timer vol is (bereikt of voorbij sessionTimerMs)
+  if (elapsed >= sessionTimerMs) {
+    // Timer klaar - toon "0" aan het einde
+    static int lastDisplayDigit = -1;
+    if (lastDisplayDigit != 0) {
+      displayDigit(0);
+      lastDisplayDigit = 0;
+    }
     return;
   }
   
-  // Bereken percentage
-  float percentage = (float)elapsed / totalTimerMs * 100.0;
-  int currentDigit = (int)(percentage / 10.0 + 0.5); // Afronden naar nearest integer
+  // Bereken tijdsinterval per cijfer (10 intervallen voor 0-9)
+  unsigned long intervalPerDigit = sessionTimerMs / 10;
+  
+  // Bepaal welk cijfer getoond moet worden (0-9)
+  int currentDigit = elapsed / intervalPerDigit;
   
   // Clamp naar 0-9 range
   if (currentDigit > 9) currentDigit = 9;
@@ -513,6 +582,44 @@ void updateDisplayPercentage(unsigned long elapsed) {
   if (currentDigit != lastDisplayDigit) {
     displayDigit(currentDigit);
     lastDisplayDigit = currentDigit;
+  }
+}
+
+// NIEUWE FUNCTIE: Sequentiële segment animatie (A-F) 
+// t-15 tot t-6: 0.2s per segment, t-6 tot TX-OFF: 0.1s per segment
+void updateSegmentAnimation() {
+  unsigned long currentTime = millis();
+  
+  // Bepaal interval op basis van fase
+  unsigned long currentInterval;
+  if (currentTime < warningBeepsMs) {
+    // Fase 1: t-15 tot t-6 = langzaam (0.2s)
+    currentInterval = SEGMENT_ANIMATION_INTERVAL_SLOW;
+  } else {
+    // Fase 2: t-6 tot TX-OFF = snel (0.1s)
+    currentInterval = SEGMENT_ANIMATION_INTERVAL_FAST;
+  }
+  
+  // Check of het tijd is om het volgende segment te activeren
+  if (currentTime - lastSegmentToggleTime >= currentInterval) {
+    // Reset alle segmenten eerst
+    for (int i = 0; i < 7; i++) {
+      digitalWrite(segmentPinArray[i], LOW);
+    }
+    
+    // Ga naar het volgende segment (A=0, B=1, C=2, D=3, E=4, F=5, geen G)
+    currentSegmentIndex++;
+    
+    // Na segment F, wrap terug naar A (cyclus herhalen tot TX-OFF)
+    if (currentSegmentIndex > 5) {
+      currentSegmentIndex = 0;
+    }
+    
+    // Activeer het huidige segment (HIGH = aan voor common cathode)
+    digitalWrite(segmentPinArray[currentSegmentIndex], HIGH);
+    
+    // Reset timer voor volgende segment
+    lastSegmentToggleTime = currentTime;
   }
 }
 
